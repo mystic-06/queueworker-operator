@@ -1,0 +1,9 @@
+apiVersion: apps.mystic-06.github.io/v1alpha1
+kind: QueueWorker
+metadata:
+  labels:
+    app.kubernetes.io/name: queueworker-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: queueworker-sample
+spec:
+  # TODO(user): Add fields here
