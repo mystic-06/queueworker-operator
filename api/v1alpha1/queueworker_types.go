@@ -20,42 +20,37 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
 // QueueWorkerSpec defines the desired state of QueueWorker
 type QueueWorkerSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
+	//URL of queue to monitor
+	QueueURL string `json:"queueURL"`
 
-	// foo is an example field of QueueWorker. Edit queueworker_types.go to remove/update
-	// +optional
-	Foo *string `json:"foo,omitempty"`
+	// +kubebuilder:validation:Minimum=1
+	// Minimum no. of worker pods
+	MinReplicas int32 `json:"minReplicas"`
+
+	// +kubebuilder:validation:Minimum=1
+	// Maximum no. of worker pods
+	MaxReplicas int32 `json:"maxReplicas"`
+
+	// Defines how many tasks in the queue can be occupied by one worker pod.
+	// +kubebuilder:validation:Minimum=1
+	TasksPerPod int32 `json:"tasksPerPod"`
+
+	// Image is the Docker image for the worker pods
+	Image string `json:"image"`
 }
 
 // QueueWorkerStatus defines the observed state of QueueWorker.
 type QueueWorkerStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// CurrentReplicas is the actual number of pods currently running
+	CurrentReplicas int32 `json:"currentReplicas"`
 
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
+	// LastScaleTime is the timestamp of the last scaling event
+	LastScaleTime *metav1.Time `json:"lastScaleTime,omitempty"`
 
-	// conditions represent the current state of the QueueWorker resource.
-	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
-	//
-	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
-	//
-	// The status of each condition is one of True, False, or Unknown.
-	// +listType=map
-	// +listMapKey=type
-	// +optional
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	// Conditions represent the latest available observations of the state
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 }
 
 // +kubebuilder:object:root=true
