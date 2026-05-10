@@ -6,4 +6,8 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: queueworker-sample
 spec:
-  # TODO(user): Add fields here
+  queueURL: "redis://redis-service:6379"
+  minReplicas: 1
+  maxReplicas: 10
+  image: "nginx" # Using nginx just to test if the pod spawns
+  tasksPerPod: 50
