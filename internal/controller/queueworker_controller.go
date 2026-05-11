@@ -29,6 +29,9 @@ import (
 	"github.com/mystic-06/queueworker-operator/api/v1alpha1"
 	appsv1alpha1 "github.com/mystic-06/queueworker-operator/api/v1alpha1"
 	"github.com/rs/zerolog/log"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // QueueWorkerReconciler reconciles a QueueWorker object
@@ -64,10 +67,11 @@ func (r *QueueWorkerReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			return ctrl.Result{}, nil
 		}
 		//If it's a different error, return the error
-		log.Error().Msg("Unable to fetch resource QueueWorker")
+		log.Error().Err(err).Msg("Unable to fetch QueueWorker")
 		return ctrl.Result{}, err
 	}
 
+	//Create or Update the deployment
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      qworker.Name + "-deployment",
@@ -77,10 +81,43 @@ func (r *QueueWorkerReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deployment,
 		func() error {
-			//TO DO: Add logic here
-			return nil
+			var replicas int32 = qworker.Spec.MinReplicas
+
+			deployment.Spec.Replicas = &replicas
+
+			labels := map[string]string{
+				"app": qworker.Name,
+			}
+
+			deployment.Spec.Selector = &metav1.LabelSelector{
+				MatchLabels: labels,
+			}
+
+			//Update the Pod deployment
+			deployment.Spec.Template = corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "worker",
+							Image: qworker.Spec.Image,
+						},
+					},
+				},
+			}
+
+			return controllerutil.SetControllerReference(
+				qworker,
+				deployment,
+				r.Scheme,
+			)
 		},
 	)
+
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to reconcile Deployment")
+		return ctrl.Result{}, err
+	}
 
 	return ctrl.Result{}, nil
 }
