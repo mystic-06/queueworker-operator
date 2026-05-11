@@ -19,12 +19,16 @@ package controller
 import (
 	"context"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/mystic-06/queueworker-operator/api/v1alpha1"
 	appsv1alpha1 "github.com/mystic-06/queueworker-operator/api/v1alpha1"
+	"github.com/rs/zerolog/log"
 )
 
 // QueueWorkerReconciler reconciles a QueueWorker object
@@ -49,7 +53,34 @@ type QueueWorkerReconciler struct {
 func (r *QueueWorkerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = logf.FromContext(ctx)
 
-	// TODO(user): your logic here
+	qworker := &v1alpha1.QueueWorker{}
+
+	//Fetch queueworker instance
+	if err := r.Get(ctx, req.NamespacedName, qworker); err != nil {
+		//Check if resource is not found
+		if apierrors.IsNotFound(err) {
+			//The resource was deleted
+			log.Info().Msg("QueueWorker resource not found.")
+			return ctrl.Result{}, nil
+		}
+		//If it's a different error, return the error
+		log.Error().Msg("Unable to fetch resource QueueWorker")
+		return ctrl.Result{}, err
+	}
+
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      qworker.Name + "-deployment",
+			Namespace: qworker.Namespace,
+		},
+	}
+
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deployment,
+		func() error {
+			//TO DO: Add logic here
+			return nil
+		},
+	)
 
 	return ctrl.Result{}, nil
 }
