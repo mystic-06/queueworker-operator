@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"math"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -40,19 +41,24 @@ type QueueWorkerReconciler struct {
 	Scheme *runtime.Scheme
 }
 
+func calculateReplicas(queueDepth int, tasksPerPod int32, minReplicas int32, maxReplicas int32) int32 {
+	replicas := math.Ceil(float64(queueDepth) / float64(tasksPerPod))
+
+	if replicas < float64(minReplicas) {
+		return minReplicas
+	} else if replicas > float64(maxReplicas) {
+		return maxReplicas
+	}
+
+	return int32(replicas)
+}
+
 // +kubebuilder:rbac:groups=apps.mystic-06.github.io,resources=queueworkers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps.mystic-06.github.io,resources=queueworkers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps.mystic-06.github.io,resources=queueworkers/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the QueueWorker object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.23.3/pkg/reconcile
 func (r *QueueWorkerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = logf.FromContext(ctx)
 
@@ -71,6 +77,20 @@ func (r *QueueWorkerReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
+	queueDepth := 101
+
+	desiredReplicas := calculateReplicas(
+		queueDepth,
+		qworker.Spec.TasksPerPod,
+		qworker.Spec.MinReplicas,
+		qworker.Spec.MaxReplicas,
+	)
+
+	log.Info().
+		Int32("desiredReplicas", desiredReplicas).
+		Int32("qworker.Spec.TasksPerPod", qworker.Spec.TasksPerPod).
+		Msg("Calculated desired replicas")
+
 	//Create or Update the deployment
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -81,9 +101,9 @@ func (r *QueueWorkerReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deployment,
 		func() error {
-			var replicas int32 = qworker.Spec.MinReplicas
+			// var replicas int32 = qworker.Spec.MinReplicas
 
-			deployment.Spec.Replicas = &replicas
+			deployment.Spec.Replicas = &desiredReplicas
 
 			labels := map[string]string{
 				"app": qworker.Name,
