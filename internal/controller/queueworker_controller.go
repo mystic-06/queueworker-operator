@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"math"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -79,6 +80,7 @@ func (r *QueueWorkerReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	queueDepth := 101
 
+	//Get the required no. of replicas
 	desiredReplicas := calculateReplicas(
 		queueDepth,
 		qworker.Spec.TasksPerPod,
@@ -99,11 +101,67 @@ func (r *QueueWorkerReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		},
 	}
 
+	//Fetch the current deployment data
+	depErr := r.Get(ctx,
+		client.ObjectKey{
+			Name:      deployment.Name,
+			Namespace: deployment.Namespace,
+		},
+		deployment,
+	)
+
+	if depErr != nil && !apierrors.IsNotFound(depErr) {
+		log.Error().Err(depErr).Msg("Unable to fetch Deployment")
+		return ctrl.Result{}, depErr
+	}
+
+	//Get the current no. of replicas in this iteration
+	var currentReplicas int32 = 0
+
+	if deployment.Spec.Replicas != nil {
+		currentReplicas = *deployment.Spec.Replicas
+	}
+
+	log.Info().Int32("currentReplicas", currentReplicas)
+
+	var finalReplicas int32 = desiredReplicas
+
+	const cooldownDuration = 30 * time.Second
+
+	cooldownActive := false
+
+	if qworker.Status.LastScaleTime != nil {
+
+		timeSinceLastScale := time.Since(qworker.Status.LastScaleTime.Time)
+
+		if timeSinceLastScale < cooldownDuration {
+			cooldownActive = true
+		}
+	}
+
+	//Scale down with a cooldown to avoid oscillation
+	if desiredReplicas < currentReplicas && cooldownActive {
+		finalReplicas = currentReplicas
+
+		log.Info().Msg("Cooldown active, skipping scale down")
+	}
+
+	if finalReplicas != currentReplicas {
+		now := metav1.Now()
+
+		qworker.Status.LastScaleTime = &now
+
+		if err := r.Status().Update(ctx, qworker); err != nil {
+			log.Error().Err(err).Msg("Unable to update QueueWorker status")
+
+			return ctrl.Result{}, err
+		}
+	}
+
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deployment,
 		func() error {
-			// var replicas int32 = qworker.Spec.MinReplicas
 
-			deployment.Spec.Replicas = &desiredReplicas
+			deployment.Spec.Replicas = &finalReplicas
 
 			labels := map[string]string{
 				"app": qworker.Name,
@@ -136,7 +194,9 @@ func (r *QueueWorkerReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to reconcile Deployment")
-		return ctrl.Result{}, err
+		return ctrl.Result{
+			RequeueAfter: 15 * time.Second,
+		}, err
 	}
 
 	return ctrl.Result{}, nil
