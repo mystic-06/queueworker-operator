@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -82,3 +83,67 @@ var _ = Describe("QueueWorker Controller", func() {
 		})
 	})
 })
+
+func TestCalculateReplicas(t *testing.T) {
+	tests := []struct {
+		name string
+
+		queueDepth  int
+		tasksPerPod int32
+		minReplicas int32
+		maxReplicas int32
+
+		expectedVal int32
+	}{
+		{
+			name:        "normal scaling",
+			queueDepth:  101,
+			tasksPerPod: 50,
+			minReplicas: 1,
+			maxReplicas: 10,
+			expectedVal: 3,
+		},
+		{
+			name:        "minimum replicas enforced",
+			queueDepth:  0,
+			tasksPerPod: 50,
+			minReplicas: 1,
+			maxReplicas: 10,
+			expectedVal: 1,
+		},
+		{
+			name:        "maximum replicas enforced",
+			queueDepth:  999,
+			tasksPerPod: 50,
+			minReplicas: 1,
+			maxReplicas: 10,
+			expectedVal: 10,
+		},
+		{
+			name:        "exact division",
+			queueDepth:  100,
+			tasksPerPod: 50,
+			minReplicas: 1,
+			maxReplicas: 10,
+			expectedVal: 2,
+		},
+		{
+			name:        "ceiling behavior",
+			queueDepth:  51,
+			tasksPerPod: 50,
+			minReplicas: 1,
+			maxReplicas: 10,
+			expectedVal: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := CalculateReplicas(tt.queueDepth, tt.tasksPerPod, tt.minReplicas, tt.maxReplicas)
+
+			if got != tt.expectedVal {
+				t.Errorf("got %d wanted %d", got, tt.expectedVal)
+			}
+		})
+	}
+}

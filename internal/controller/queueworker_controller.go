@@ -42,7 +42,7 @@ type QueueWorkerReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-func calculateReplicas(queueDepth int, tasksPerPod int32, minReplicas int32, maxReplicas int32) int32 {
+func CalculateReplicas(queueDepth int, tasksPerPod int32, minReplicas int32, maxReplicas int32) int32 {
 	replicas := math.Ceil(float64(queueDepth) / float64(tasksPerPod))
 
 	if replicas < float64(minReplicas) {
@@ -81,7 +81,7 @@ func (r *QueueWorkerReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	queueDepth := 101
 
 	//Get the required no. of replicas
-	desiredReplicas := calculateReplicas(
+	desiredReplicas := CalculateReplicas(
 		queueDepth,
 		qworker.Spec.TasksPerPod,
 		qworker.Spec.MinReplicas,
@@ -194,12 +194,12 @@ func (r *QueueWorkerReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to reconcile Deployment")
-		return ctrl.Result{
-			RequeueAfter: 15 * time.Second,
-		}, err
+		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{
+		RequeueAfter: 15 * time.Second,
+	}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
