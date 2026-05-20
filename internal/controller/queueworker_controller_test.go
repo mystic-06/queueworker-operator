@@ -25,9 +25,10 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
+	appsv1 "k8s.io/api/apps/v1"
 	appsv1alpha1 "github.com/mystic-06/queueworker-operator/api/v1alpha1"
 )
 
@@ -52,7 +53,12 @@ var _ = Describe("QueueWorker Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: appsv1alpha1.QueueWorkerSpec{
+						MinReplicas: 1,
+						MaxReplicas: 10,
+						TasksPerPod: 35, 	
+						Image: "nginx"
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
@@ -77,9 +83,22 @@ var _ = Describe("QueueWorker Controller", func() {
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
+
+			deployment := &appsv1.Deployment{}
+
+			depErr := k8sClient.Get(
+				ctx,
+				client.ObjectKey{
+					Name: resourceName + "-deployment",
+					Namespace: "default",
+				},
+				deployment,
+			)
+
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+			Expect(depErr).NotTo(HaveOccurred())
+			Expect(deployment.Spec.Replicas).NotTo(BeNil())
+			Expect(*deployment.Spec.Replicas).To(Equal(int32(3)))
 		})
 	})
 })
