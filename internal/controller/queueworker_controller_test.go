@@ -24,12 +24,12 @@ import (
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	appsv1 "k8s.io/api/apps/v1"
 	appsv1alpha1 "github.com/mystic-06/queueworker-operator/api/v1alpha1"
+	appsv1 "k8s.io/api/apps/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 var _ = Describe("QueueWorker Controller", func() {
@@ -56,8 +56,8 @@ var _ = Describe("QueueWorker Controller", func() {
 					Spec: appsv1alpha1.QueueWorkerSpec{
 						MinReplicas: 1,
 						MaxReplicas: 10,
-						TasksPerPod: 35, 	
-						Image: "nginx"
+						TasksPerPod: 35,
+						Image:       "nginx",
 					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
@@ -73,6 +73,7 @@ var _ = Describe("QueueWorker Controller", func() {
 			By("Cleanup the specific resource instance QueueWorker")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
+
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &QueueWorkerReconciler{
@@ -89,7 +90,7 @@ var _ = Describe("QueueWorker Controller", func() {
 			depErr := k8sClient.Get(
 				ctx,
 				client.ObjectKey{
-					Name: resourceName + "-deployment",
+					Name:      resourceName + "-deployment",
 					Namespace: "default",
 				},
 				deployment,
@@ -99,6 +100,116 @@ var _ = Describe("QueueWorker Controller", func() {
 			Expect(depErr).NotTo(HaveOccurred())
 			Expect(deployment.Spec.Replicas).NotTo(BeNil())
 			Expect(*deployment.Spec.Replicas).To(Equal(int32(3)))
+		})
+
+		It("should update Deployment when QueueWorker spec changes", func() {
+			ctx := context.Background()
+
+			qw := &appsv1alpha1.QueueWorker{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "update-test",
+					Namespace: "default",
+				},
+				Spec: appsv1alpha1.QueueWorkerSpec{
+					MinReplicas: 1,
+					MaxReplicas: 10,
+					TasksPerPod: 50,
+					Image:       "nginx",
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, qw)).To(Succeed())
+
+			reconciler := &QueueWorkerReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			//During first reconcile
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      "update-test",
+					Namespace: "default",
+				},
+			})
+
+			Expect(err).NotTo(HaveOccurred())
+
+			deployment := &appsv1.Deployment{}
+
+			Expect(k8sClient.Get(
+				ctx,
+				client.ObjectKey{
+					Name:      "update-test-deployment",
+					Namespace: "default",
+				},
+				deployment,
+			)).To(Succeed())
+
+			//queueDepth is hardcoded right now
+
+			Expect(*deployment.Spec.Replicas).To(Equal(int32(3)))
+
+			Expect(k8sClient.Get(
+				ctx,
+				types.NamespacedName{
+					Name:      "update-test",
+					Namespace: "default",
+				},
+				qw,
+			)).To(Succeed())
+
+			qw.Spec.TasksPerPod = 25
+
+			Expect(k8sClient.Update(ctx, qw)).To(Succeed())
+
+			// Reconcile again
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      "update-test",
+					Namespace: "default",
+				},
+			})
+
+			Expect(err).NotTo(HaveOccurred())
+
+			// Fetch deployment again
+			Expect(k8sClient.Get(
+				ctx,
+				client.ObjectKey{
+					Name:      "update-test-deployment",
+					Namespace: "default",
+				},
+				deployment,
+			)).To(Succeed())
+
+			Expect(*deployment.Spec.Replicas).To(Equal(int32(5)))
+		})
+
+		It("should handle QueueWorker deletion gracefully", func() {
+			resource := &appsv1alpha1.QueueWorker{}
+
+			Expect(k8sClient.Get(
+				ctx,
+				typeNamespacedName,
+				resource,
+			)).To(Succeed())
+
+			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+
+			reconciler := &QueueWorkerReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      queueworker.Name,
+					Namespace: queueworker.Namespace,
+				},
+			})
+
+			Expect(err).NotTo(HaveOccurred())
 		})
 	})
 })
