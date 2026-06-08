@@ -1,135 +1,250 @@
 # QueueWorker Operator
-Kubernetes operator in Go that autoscales worker deployments based on queue depth using custom resources and reconciliation loops. 
 
-## Description
-// TODO : An in-depth paragraph about the project and overview of use
+A Kubernetes operator written in Go using the **Kubebuilder** framework and `controller-runtime` to autoscale worker deployments dynamically based on queue depth. 
+
+---
+
+## Table of Contents
+1. [Overview](#overview)
+2. [Architecture & Reconciliation Loop](#architecture--reconciliation-loop)
+3. [Custom Resource Definition (CRD)](#custom-resource-definition-crd)
+4. [Getting Started](#getting-started)
+   - [Prerequisites](#prerequisites)
+   - [Local Development](#local-development)
+5. [Testing](#testing)
+6. [Observability (Prometheus & Grafana)](#observability-prometheus--grafana)
+7. [Design Decisions & What I Learned](#design-decisions--what-i-learned)
+8. [Checklist & Project Roadmap](#checklist--project-roadmap)
+9. [License](#license)
+
+---
+
+## Overview
+
+The **QueueWorker Operator** automates the scaling of worker applications running in Kubernetes. Instead of scaling based on traditional resource usage (like CPU or Memory), it monitors a queue depth (designed for integrations like Redis/SQS; currently using a mock metric source) and scales the replica count of worker `Pods` to match the workload demand.
+
+### Core Features:
+- **Queue-Depth Driven Scaling**: Automatically calculates replicas based on `tasksPerPod` metric.
+- **Scale-Down Cooldown**: Prevents system "thrashing" (frequent scale-down followed by immediate scale-up) using a customizable cooldown timer.
+- **Kubernetes Native Lifecycle**: Fully declarative API using Custom Resource Definitions (CRDs), garbage-collected child deployments, and condition tracking.
+- **Prometheus Metrics**: Ready-to-integrate metrics server endpoint for deep observability into scaling activities.
+
+---
+
+## Architecture & Reconciliation Loop
+
+The operator runs a continuous reconciliation loop that observes the current state of the cluster, retrieves the queue depth metrics, and alters the child deployment target to match the desired scale.
+
+### Reconciliation Flow
+
+```mermaid
+graph TD
+    A[Start Reconcile] --> B[Fetch QueueWorker CR]
+    B -->|Not Found| C[Exit]
+    B -->|Found| D[Calculate Desired Replicas<br/>Clamped by min/max]
+    D --> E{Desired vs Current?}
+    E -->|Scale Up| F[Scale Up Immediately]
+    E -->|Scale Down| G{Cooldown Active?}
+    G -->|No| H[Scale Down]
+    G -->|Yes / No Change| I[Keep Current Scale]
+    F --> J[Update Deployment &<br/>Status lastScaleTime]
+    H --> J
+    I --> K[Sync Deployment State &<br/>Status currentReplicas]
+    J --> K
+    K --> L[Requeue in 15s]
+```
+
+### Key Mechanisms:
+1. **Replica Calculation**: Desired replicas are calculated via:
+   $$\text{Desired Replicas} = \min\left(\text{maxReplicas}, \max\left(\text{minReplicas}, \left\lceil \frac{\text{Queue Depth}}{\text{tasksPerPod}} \right\rceil\right)\right)$$
+2. **Owner References**: The generated `Deployment` has its `OwnerReference` set to the parent `QueueWorker` CR. When the CR is deleted, Kubernetes automatically garbage collects the deployment resources.
+3. **Loop Scheduling**: The controller returns a requeue result (`RequeueAfter: 15 * time.Second`) ensuring the controller polls the queue depth periodically even if no Kubernetes events trigger it.
+
+---
+
+## Custom Resource Definition (CRD)
+
+The operator registers the `QueueWorker` custom resource in the `apps.mystic-06.github.io` API group. 
+
+### Spec Fields (`spec`)
+| Field | Type | Description | Required | Validation |
+|---|---|---|---|---|
+| `queueURL` | `string` | The HTTP/S URL of the queue metric source to monitor. | Yes | - |
+| `minReplicas` | `int32` | The minimum number of worker pods that must run. | Yes | `>= 1` |
+| `maxReplicas` | `int32` | The maximum number of worker pods allowed to scale to. | Yes | `>= 1` |
+| `tasksPerPod` | `int32` | How many queue items single pod can handle. | Yes | `>= 1` |
+| `image` | `string` | The Docker image for the worker pods. | Yes | - |
+
+### Status Fields (`status`)
+| Field | Type | Description |
+|---|---|---|
+| `currentReplicas` | `int32` | The actual replica count currently running. |
+| `lastScaleTime` | `metav1.Time` | Timestamp of the last scaling modification. |
+| `conditions` | `[]metav1.Condition` | Status observations (Ready, Progressing, etc.) of the resource. |
+
+### Sample CR Configuration
+```yaml
+apiVersion: apps.mystic-06.github.io/v1alpha1
+kind: QueueWorker
+metadata:
+  name: my-queueworker
+  namespace: default
+spec:
+  queueURL: "https://sqs.us-east-1.amazonaws.com/123456789012/my-work-queue"
+  minReplicas: 1
+  maxReplicas: 10
+  tasksPerPod: 10
+  image: nginx:alpine
+```
+
+---
 
 ## Getting Started
 
 ### Prerequisites
-- go version v1.24.6+
-- docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
+- **Go**: `1.22+` (project configured with `1.25.7`)
+- **Docker**: For building and loading images.
+- **kubectl**: For cluster administration.
+- **Kind** (Kubernetes in Docker): For local dev cluster environment.
 
-### To Deploy on the cluster
-**Build and push your image to the location specified by `IMG`:**
+---
 
-```sh
-make docker-build docker-push IMG=<some-registry>/queueworker-operator:tag
+### Local Development
+
+1. **Spin up a local Kind cluster**:
+   ```bash
+   kind create cluster --name operator-dev
+   ```
+
+2. **Generate manifests & install CRDs**:
+   ```bash
+   make manifests generate
+   make install
+   ```
+
+3. **Run the controller locally**:
+   Runs the operator process directly on your host machine bound to your active kubeconfig context:
+   ```bash
+   make run
+   ```
+
+4. **Apply a sample CR**:
+   ```bash
+   kubectl apply -f config/samples/apps_v1alpha1_queueworker.yaml
+   ```
+
+---
+
+## Testing
+
+The project contains unit tests and integration tests (using `envtest`).
+
+### Run Unit and Integration Tests
+```bash
+make test
+```
+The integration tests use **envtest**, which spins up a local control plane (etcd + K8s API server) to validate CRUD operations on `QueueWorker` resources, owner references, status changes, and reconciling logic without needing a fully running cluster.
+
+---
+
+## Observability (Prometheus & Grafana)
+
+The operator contains built-in instrumentation leveraging `controller-runtime`'s metrics endpoint. Although Phase 5 is in progress, the metrics schema and configuration setups are designed as follows:
+
+### Exposed Metrics
+- `queueworker_scale_events_total`: A Prometheus **Counter** incremented on each scale-up or scale-down event. Includes labels for `namespace`, `name`, and `direction` (`up` / `down`).
+- `queueworker_replica_count`: A Prometheus **Gauge** representing current replicas. Includes labels for `namespace` and `name`.
+- `queueworker_queue_depth`: A Prometheus **Gauge** representing the tracked queue depth. Includes labels for `namespace`, `name`, and `queue_url`.
+
+### Running Locally with Docker Compose
+
+To test observability metrics locally, spin up a Prometheus and Grafana instance side-by-side using the following `docker-compose.yaml` (saved in your observability tooling directory):
+
+```yaml
+version: '3.8'
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    container_name: operator-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:10.0.0
+    container_name: operator-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
 ```
 
-**NOTE:** This image ought to be published in the personal registry you specified.
-And it is required to have access to pull the image from the working environment.
-Make sure you have the proper permission to the registry if the above commands don’t work.
+Create a matching `prometheus.yml` configuration to scrape the metrics:
 
-**Install the CRDs into the cluster:**
+```yaml
+global:
+  scrape_interval: 10s
 
-```sh
-make install
+scrape_configs:
+  - job_name: 'queueworker-operator'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['host.docker.internal:8080'] # Points to the manager running locally via `make run`
 ```
+> **Note**: For metrics scrape to work, ensure the manager is started with `--metrics-secure=false` and `--metrics-bind-address=:8080` (so HTTPS/RBAC wrapper is bypassed during local metrics testing).
 
-**Deploy the Manager to the cluster with the image specified by `IMG`:**
+---
 
-```sh
-make deploy IMG=<some-registry>/queueworker-operator:tag
-```
+## Design Decisions & What I Learned
 
-> **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
-privileges or be logged in as admin.
+### 1. Scaling Cooldown Logic
+**Problem**: Scaling down immediately when queue depth drops can trigger "thrashing". If the queue drops briefly for 5 seconds and spikes again, pods are repeatedly terminated and recreated, adding severe overhead.
+**Solution**: Implemented a `30s` cooldown period for scale-down actions (checked via `status.lastScaleTime`). Scale-up requests bypass this cooldown to ensure system responsiveness under sudden load spikes.
 
-**Create instances of your solution**
-You can apply the samples (examples) from the config/sample:
+### 2. Envtest Integration vs. Mocks
+**Problem**: Testing controllers via mock kubernetes clients fails to cover real API server behavior like garbage collection, owner references, and status validation constraints.
+**Solution**: Utilized `envtest` for integration tests. It launches an isolated, lightweight control plane (`kube-apiserver` and `etcd`) locally. It is faster than deploying to a local Kind/Minikube cluster, but guarantees that actual API serialization, reconciliation loops, and K8s object relationships work exactly like a production cluster.
 
-```sh
-kubectl apply -k config/samples/
-```
+---
 
->**NOTE**: Ensure that the samples has default values to test it out.
+## Checklist & Project Roadmap
 
-### To Uninstall
-**Delete the instances (CRs) from the cluster:**
+Here is the progress tracker for the QueueWorker Operator project:
 
-```sh
-kubectl delete -k config/samples/
-```
+- [x] **Phase 1: Prerequisites & Setup**
+  - [x] Understand Kubernetes Operator pattern
+  - [x] Scaffold the workspace using Kubebuilder
+- [x] **Phase 2: Custom Resource Definition (CRD)**
+  - [x] Design spec and status schema
+  - [x] Auto-generate manifests and deepcopy methods
+  - [x] Register and verify CRD in local cluster
+- [x] **Phase 3: Controller Implementation**
+  - [x] Setup reconciliation loop fetch/not-found logic
+  - [x] Implement child Deployment creation/updates via `CreateOrUpdate`
+  - [x] Add owner references (`SetControllerReference`)
+  - [x] Establish calculation logic and scale-down cooldown
+  - [x] Track and update status subresource (`lastScaleTime`, replicas)
+- [x] **Phase 4: Testing**
+  - [x] Write scaling calculation unit tests
+  - [x] Write CRUD/integration tests using `envtest`
+  - [ ] Test cooldown logic with `k8s.io/utils/clock.FakeClock`
+- [ ] **Phase 5: Observability** (Ongoing)
+  - [ ] Add Prometheus Counter for scaling events
+  - [ ] Add Prometheus Gauge for active replicas
+  - [ ] Setup Prometheus & Grafana scrape configuration
+  - [ ] Design custom dashboard for scaling monitoring
+- [ ] **Phase 6: Hardening & Distribution**
+  - [ ] Add validating webhook (`defaulting --programmatic-validation`)
+  - [ ] Restrict RBAC ClusterRole permissions to absolute minimum
+  - [ ] Write Helm Chart for single-command installation
+  - [ ] Record asciinema demo of operator autoscaling pods
 
-**Delete the APIs(CRDs) from the cluster:**
-
-```sh
-make uninstall
-```
-
-**UnDeploy the controller from the cluster:**
-
-```sh
-make undeploy
-```
-
-## Project Distribution
-
-Following the options to release and provide this solution to the users.
-
-### By providing a bundle with all YAML files
-
-1. Build the installer for the image built and published in the registry:
-
-```sh
-make build-installer IMG=<some-registry>/queueworker-operator:tag
-```
-
-**NOTE:** The makefile target mentioned above generates an 'install.yaml'
-file in the dist directory. This file contains all the resources built
-with Kustomize, which are necessary to install this project without its
-dependencies.
-
-2. Using the installer
-
-Users can just run 'kubectl apply -f <URL for YAML BUNDLE>' to install
-the project, i.e.:
-
-```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/queueworker-operator/<tag or branch>/dist/install.yaml
-```
-
-### By providing a Helm Chart
-
-1. Build the chart using the optional helm plugin
-
-```sh
-kubebuilder edit --plugins=helm/v2-alpha
-```
-
-2. See that a chart was generated under 'dist/chart', and users
-can obtain this solution from there.
-
-**NOTE:** If you change the project, you need to update the Helm Chart
-using the same command above to sync the latest changes. Furthermore,
-if you create webhooks, you need to use the above command with
-the '--force' flag and manually ensure that any custom configuration
-previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml'
-is manually re-applied afterwards.
-
-## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
-
-**NOTE:** Run `make help` for more information on all potential `make` targets
-
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
+---
 
 ## License
 
-Copyright 2026.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
+Copyright 2026. Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
