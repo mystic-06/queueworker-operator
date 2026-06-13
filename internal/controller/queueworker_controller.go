@@ -30,16 +30,36 @@ import (
 
 	"github.com/mystic-06/queueworker-operator/api/v1alpha1"
 	appsv1alpha1 "github.com/mystic-06/queueworker-operator/api/v1alpha1"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/rs/zerolog/log"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 // QueueWorkerReconciler reconciles a QueueWorker object
 type QueueWorkerReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme  *runtime.Scheme
+	Metrics *QueueWorkerMetrics
+}
+
+type QueueWorkerMetrics struct {
+	scaleEventCounter prometheus.Counter
+}
+
+func newMetrics(reg prometheus.Registerer) *QueueWorkerMetrics {
+	m := &QueueWorkerMetrics{
+		scaleEventCounter: promauto.With(reg).NewCounter(
+			prometheus.CounterOpts{
+				Name: "scale_event_count",
+				Help: "No. of scale events that have taken place",
+			}),
+	}
+
+	return m
 }
 
 func CalculateReplicas(queueDepth int, tasksPerPod int32, minReplicas int32, maxReplicas int32) int32 {
@@ -57,6 +77,7 @@ func CalculateReplicas(queueDepth int, tasksPerPod int32, minReplicas int32, max
 // +kubebuilder:rbac:groups=apps.mystic-06.github.io,resources=queueworkers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps.mystic-06.github.io,resources=queueworkers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps.mystic-06.github.io,resources=queueworkers/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -78,7 +99,7 @@ func (r *QueueWorkerReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	queueDepth := 101
+	queueDepth := 300
 
 	//Get the required no. of replicas
 	desiredReplicas := CalculateReplicas(
@@ -148,9 +169,11 @@ func (r *QueueWorkerReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	if finalReplicas != currentReplicas {
 		now := metav1.Now()
-
 		qworker.Status.LastScaleTime = &now
 
+		if r.Metrics != nil && r.Metrics.scaleEventCounter != nil {
+			r.Metrics.scaleEventCounter.Inc()
+		}
 		if err := r.Status().Update(ctx, qworker); err != nil {
 			log.Error().Err(err).Msg("Unable to update QueueWorker status")
 
@@ -204,6 +227,8 @@ func (r *QueueWorkerReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *QueueWorkerReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.Metrics = newMetrics(crmetrics.Registry)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&appsv1alpha1.QueueWorker{}).
 		Named("queueworker").

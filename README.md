@@ -233,7 +233,7 @@ Here is the progress tracker for the QueueWorker Operator project:
   - [x] Write CRUD/integration tests using `envtest`
   - [ ] Test cooldown logic with `k8s.io/utils/clock.FakeClock`
 - [ ] **Phase 5: Observability** (Ongoing)
-  - [ ] Add Prometheus Counter for scaling events
+  - [x] Add Prometheus Counter for scaling events
   - [ ] Add Prometheus Gauge for active replicas
   - [ ] Setup Prometheus & Grafana scrape configuration
   - [ ] Design custom dashboard for scaling monitoring
